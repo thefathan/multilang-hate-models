@@ -14,7 +14,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 
 
 # Load dataset
-df = pd.read_csv('/nas.dbms/fathan/test/data_preprocessed.csv', header=0)
+df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/data_preprocessed.csv', header=0)
 df.info()
 print(df.sample(5))
 
@@ -84,9 +84,9 @@ for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['label
     training_args = TrainingArguments(
         output_dir=f"./results_fold_{fold}",
         overwrite_output_dir=True,
-        num_train_epochs=50,
-        per_device_train_batch_size=56,
-        per_device_eval_batch_size=48,
+        num_train_epochs=10,
+        per_device_train_batch_size=64,
+        per_device_eval_batch_size=32,
         evaluation_strategy=IntervalStrategy.EPOCH,
         logging_dir=f"./logs_fold_{fold}",
         logging_steps=100,
@@ -161,12 +161,17 @@ for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['label
     print(f'F1 Score: {f1}')
 
     conf_matrix = confusion_matrix(y_true, y_pred)
+    
+    # Ensure the directory exists
+    output_dir = '/nas.dbms/fathan/test/multilang-hate-models/IndobertHatespeech/'
+    os.makedirs(output_dir, exist_ok=True)
+    
     plt.figure(figsize=(8, 6))
     sns.heatmap(conf_matrix, annot=True, fmt="d", cmap="Blues", xticklabels=["Negative", "Positive"], yticklabels=["Negative", "Positive"])
     plt.xlabel('Predicted Label')
     plt.ylabel('True Label')
     plt.title(f'Confusion Matrix Fold {fold + 1}')
-    plt.savefig(f'/nas.dbms/fathan/test/IndobertHatespeech/confusion_matrix_fold_{fold + 1}.png')
+    plt.savefig(os.path.join(output_dir, f'confusion_matrix_fold_{fold + 1}.png'))
 
     plt.figure(figsize=(10, 6))
     plt.plot(f1_scores_per_epoch, marker='o', linestyle='-', color='b', label='F1 Score')
@@ -175,7 +180,7 @@ for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['label
     plt.ylabel('F1 Score')
     plt.grid(True)
     plt.legend()
-    plt.savefig(f'/nas.dbms/fathan/test/IndobertHatespeech/f1_score_per_epoch_fold_{fold + 1}.png')
+    plt.savefig(os.path.join(output_dir, f'f1_score_per_epoch_fold_{fold + 1}.png'))
 
     plt.figure(figsize=(10, 6))
     plt.plot(validation_losses_per_epoch, marker='o', linestyle='-', color='g', label='Validation Loss')
@@ -184,7 +189,7 @@ for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['label
     plt.ylabel('Loss')
     plt.grid(True)
     plt.legend()
-    plt.savefig(f'/nas.dbms/fathan/test/IndobertHatespeech/loss_per_epoch_fold_{fold + 1}.png')
+    plt.savefig(os.path.join(output_dir, f'loss_per_epoch_fold_{fold + 1}.png'))
 
 avg_accuracy = np.mean(metrics['accuracy'])
 avg_precision = np.mean(metrics['precision'])

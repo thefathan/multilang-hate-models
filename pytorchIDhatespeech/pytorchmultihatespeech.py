@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import BertTokenizer, BertModel
+from transformers import BertTokenizer, BertModel, RobertaTokenizer, RobertaModel
 import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
@@ -11,18 +11,16 @@ import seaborn as sns
 
 # Load your dataframe
 # Assuming the dataframe is loaded into `df`
-data1 = pd.read_csv('/nas.dbms/fathan/test/processed_train.csv')
-print(data1.info())
-df = data1.iloc[:5596]  # Adjust the path to your data
-tf = data1.iloc[5596:]
+df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/processed_train.csv')  # Adjust the path to your data
+tf = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/processed_test.csv')  # Adjust the path to your data
 
 # Ensure all label columns contain only integers
 label_columns = ['pornografi', 'sara', 'radikalisme', 'pencemaran_nama_baik']
 df[label_columns] = df[label_columns].apply(pd.to_numeric, errors='coerce').fillna(0).astype(int)
 tf[label_columns] = tf[label_columns].apply(pd.to_numeric, errors='coerce').fillna(0).astype(int)
 
-# print(df.sample(5))
-# print(tf.sample(5))
+print(df.sample(5))
+print(tf.sample(5))
 
 # Define the dataset class
 class TextDataset(Dataset):
@@ -55,7 +53,7 @@ class TextDataset(Dataset):
         }
 
 # Load the IndoBERT tokenizer
-tokenizer = BertTokenizer.from_pretrained('indobenchmark/indobert-base-p1')
+tokenizer = RobertaTokenizer.from_pretrained('FacebookAI/roberta-base')
 
 # Create the dataset and dataloader
 max_len = 128
@@ -71,7 +69,7 @@ testloader = DataLoader(testset, batch_size=32, shuffle=True)
 class TextClassifier(nn.Module):
     def __init__(self, n_classes):
         super(TextClassifier, self).__init__()
-        self.bert = BertModel.from_pretrained('indobenchmark/indobert-base-p1')
+        self.bert = RobertaModel.from_pretrained('FacebookAI/roberta-base')
         self.drop = nn.Dropout(p=0.3)
         self.out = nn.Linear(self.bert.config.hidden_size, n_classes)
     
