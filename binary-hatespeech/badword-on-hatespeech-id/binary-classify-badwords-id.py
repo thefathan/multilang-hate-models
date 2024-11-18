@@ -1,6 +1,7 @@
 # Install required packages
 import subprocess
 import sys
+import os
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -22,23 +23,13 @@ import seaborn as sns
 from imblearn.under_sampling import RandomUnderSampler
 
 # Load the dataset
-neg_df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/data_preprocessed.csv', header=0)
-neg_df['label'] = neg_df['hs_class'].map({'positive': 1, 'negative': 0})
-
-# Filter the DataFrame to only include rows where hs_class is 'negative'
-neg_df = neg_df[neg_df['hs_class'] == 'negative']
-
-# hs_class is 'positive' WITH BAD WORD 
-pos_df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-id/positive_hatespeech_with_bad_words.csv')
-
-# # Ensure both DataFrames have the correct column names
-# neg_df.columns = ['text', 'hs_class']
-# pos_df.columns = ['text', 'hs_class']
-
-df = pd.concat([neg_df, pos_df], ignore_index=True)
+df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/multilang-cross-val/id_dataset_huggingface1/id_huggingface1_formatted.csv')
 
 # Ensure 'text' column contains strings
 df['text'] = df['text'].astype(str)
+
+# Map the 'hs_class' values back to integers for the model
+df['hs_class'] = df['hs_class'].map({'positive': 1, 'negative': 0})
 
 # Undersample using imbalanced-learn
 # Create the undersampling object
@@ -55,10 +46,6 @@ X_resampled, y_resampled = undersampler.fit_resample(X, y)
 df = pd.DataFrame({'text': X_resampled.flatten(), 'hs_class': y_resampled}) # df here is already resampled
 print(df['hs_class'].value_counts())
 
-# Split the dataset
-train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
-train_dataset = Dataset.from_pandas(train_df)
-test_dataset = Dataset.from_pandas(test_df)
 
 # Load the tokenizer and model (IndoBERT)
 model_name = 'indolem/indobert-base-uncased'
@@ -82,45 +69,68 @@ model = AutoModelForSequenceClassification.from_pretrained(model_name, num_label
 
 # Tokenize the dataset with padding and truncation
 def tokenize_function(examples):
-    # Use max_length to ensure sequences are consistent
-    return tokenizer(examples['text'], padding=True, truncation=True, max_length=512)
+    return tokenizer(
+        examples['text'],
+        padding='max_length',   # Ensure sequences are padded to the same length
+        truncation=True,
+        max_length=512
+    )
 
-# Map 'hs_class' to 'labels' for the model input
-train_df['labels'] = train_df['hs_class']
-test_df['labels'] = test_df['hs_class']
+# Modify the train-test split to train-validation-test (0.7, 0.15, 0.15)
+train_df, temp_df = train_test_split(df, test_size=0.3, random_state=42)
+val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42)  # Split remaining 30% equally for validation and test
+
+# Map 'hs_class' to 'labels' as integers for each split (train, val, test)
+train_df['labels'] = train_df['hs_class'].astype(int)
+val_df['labels'] = val_df['hs_class'].astype(int)
+test_df['labels'] = test_df['hs_class'].astype(int)
 
 # Convert pandas DataFrames to Hugging Face Datasets
 train_dataset = Dataset.from_pandas(train_df)
+val_dataset = Dataset.from_pandas(val_df)
 test_dataset = Dataset.from_pandas(test_df)
 
 # Apply the tokenization to the datasets
 train_dataset = train_dataset.map(tokenize_function, batched=True)
+val_dataset = val_dataset.map(tokenize_function, batched=True)
 test_dataset = test_dataset.map(tokenize_function, batched=True)
 
 # Remove unnecessary columns, keeping 'labels' and input data
 train_dataset = train_dataset.remove_columns(['text', 'hs_class', '__index_level_0__'])
+val_dataset = val_dataset.remove_columns(['text', 'hs_class', '__index_level_0__'])
 test_dataset = test_dataset.remove_columns(['text', 'hs_class', '__index_level_0__'])
 
 # Set the format for PyTorch tensors
 train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+val_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
 test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
 
 # Create a data collator that dynamically pads the input sequences during training
 data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
-# Define the training arguments
+# Reduce batch size to fit within memory constraints
 training_args = TrainingArguments(
     output_dir='./results',
     num_train_epochs=20,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
+    per_device_train_batch_size=8,   # Reduced batch size to lower memory usage
+    per_device_eval_batch_size=8,    # Reduced batch size for evaluation
     warmup_steps=500,
     weight_decay=0.01,
     logging_dir='./logs',
     logging_steps=1000,
     evaluation_strategy="epoch",
-    learning_rate=1e-5  # Custom learning rate
+    save_strategy="epoch",
+    load_best_model_at_end=True,
+    save_total_limit=1,
+    learning_rate=1e-5,
+    fp16=True,  # Enable mixed precision for memory optimization
 )
+
+# Enable gradient checkpointing to save memory during training
+model.gradient_checkpointing_enable()
+
+# Set environment variable to control memory fragmentation
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 
 # Define the compute_metrics function
 def compute_metrics(p):
@@ -135,24 +145,25 @@ def compute_metrics(p):
         'recall': recall
     }
 
-# Initialize the Trainer
+# Initialize the Trainer with memory-optimized settings
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
-    eval_dataset=test_dataset,
+    eval_dataset=val_dataset,
     compute_metrics=compute_metrics,
-    data_collator=data_collator  # Use the data collator for padding
+    data_collator=data_collator
 )
 
 # Train the model
 trainer.train()
 
-# Evaluate the model
-eval_results = trainer.evaluate()
+# Evaluate the model on the test dataset
+eval_results = trainer.evaluate(test_dataset)
 
-# Print evaluation results
-print(f"Evaluation results:\n"
+
+# Print evaluation results on the test set
+print(f"Evaluation results on test set:\n"
       f"  Loss: {eval_results['eval_loss']:.4f}\n"
       f"  Accuracy: {eval_results['eval_accuracy']:.4f}\n"
       f"  Precision: {eval_results['eval_precision']:.4f}\n"

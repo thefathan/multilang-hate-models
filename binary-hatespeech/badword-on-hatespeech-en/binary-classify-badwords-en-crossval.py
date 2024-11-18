@@ -1,6 +1,7 @@
 # Install required packages
 import subprocess
 import sys
+import os
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -22,17 +23,39 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from imblearn.under_sampling import RandomUnderSampler
 
+
+# Read sexual-related words from a txt file
+def load_sexual_words(file_path):
+    with open(file_path, 'r') as file:
+        # Strip newline characters and any extra spaces
+        words = [line.strip() for line in file.readlines()]
+    return words
+
+# Load the sexual words from the text file
+keywords = load_sexual_words("/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/misc/sex-vocab.txt")
+
+# Function to mask keywords
+def mask_keywords(text, keywords):
+    words = text.split()
+    masked_words = [word if word.lower() not in keywords else "[MASK]" for word in words]
+    return " ".join(masked_words)
+
+
+
+
 # hs_class is 'negative' WITHOUT SEXUAL WORD 
-neg_df1 = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/negative_hatespeech_without_sexual_words.csv')
+neg_df1 = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/en_dataset_limited/training/negative_hatespeech_with_sexual_words_limited.csv')
 
 # hs_class is 'negative' WITH SEXUAL WORD 
-neg_df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/negative_hatespeech_with_sexual_words.csv')
+neg_df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/en_dataset_limited/training/negative_hatespeech_without_sexual_words_limited.csv')
+neg_df_soft = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/en_dataset_limited/training/Thoroughly_Softened_Non-Hate_Speech_Dataset.csv')
 
 # hs_class is 'positive' WITH SEXUAL WORD 
-pos_df1 = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/positive_hatespeech_with_sexual_words.csv')
+pos_df1 = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/en_dataset_limited/training/positive_hatespeech_with_sexual_words_limited.csv')
+pos_df1_harsh = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/en_dataset_limited/training/Fully_Enhanced_Hateful_Dataset.csv')
 
 # hs_class is 'positive' WITHOUT SEXUAL WORD 
-pos_df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/positive_hatespeech_without_sexual_words.csv')
+pos_df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/en_dataset_limited/training/positive_hatespeech_without_sexual_words_limited.csv')
 
 # # hs_class is 'positive' WITH SEXUAL WORD + WITHOUT SEXUAL WORD 25%
 # frac_sample = 0.25
@@ -49,21 +72,33 @@ pos_df.columns = ['text', 'hs_class']
 neg_df1.columns = ['text', 'hs_class']
 pos_df1.columns = ['text', 'hs_class']
 
-df = pd.concat([neg_df1, pos_df], ignore_index=True)
-# Load the dataset
-val_df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/data_preprocessed_en_translated.csv')
+df = pd.concat([pos_df, neg_df, pos_df1, neg_df1, pos_df1_harsh, neg_df_soft], ignore_index=True)
 
-# Keep only the relevant columns (English text and hs_class)
-val_df = val_df[['text_translated', 'hs_class']]
+df = df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-# Rename columns to match the desired format
-val_df = val_df.rename(columns={'text_translated': 'text'})
+# Ensure 'text' column contains strings
+df['text'] = df['text'].astype(str)
 
-val_df = val_df.sample(frac=0.2, random_state=42)
+# Undersample using imbalanced-learn
+# Create the undersampling object
+undersampler = RandomUnderSampler(sampling_strategy='auto', random_state=42)
 
+# Separate the features (X) and the target (y)
+X = df['text'].values.reshape(-1, 1)  # Reshape required because RandomUnderSampler expects a 2D array
+y = df['hs_class']
 
-# val_df = pd.concat([neg_df1, pos_df1], ignore_index=True)
-# val_df = val_df.sample(frac=0.2, random_state=42)
+# Perform the undersampling
+X_resampled, y_resampled = undersampler.fit_resample(X, y)
+
+# Create a new dataframe with the resampled data
+df = pd.DataFrame({'text': X_resampled.flatten(), 'hs_class': y_resampled}) # df here is already resampled
+print(df['hs_class'].value_counts())
+
+# Load the dataset for validation and testing
+valtest_df = pd.read_csv('/nas.dbms/fathan/test/multilang-hate-models/binary-hatespeech/badword-on-hatespeech-en/en_dataset_limited/en_val_and_test.csv')
+valtest_df = valtest_df.dropna()
+# val_df = val_df.sample(frac=0.4, random_state=42)
+
 
 
 # # Load the tokenizer and model (IndoBERT)
@@ -88,26 +123,11 @@ model = XLMRobertaForSequenceClassification.from_pretrained(model_name, num_labe
 
 # Map the 'hs_class' values back to integers for the model
 df['hs_class'] = df['hs_class'].map({'positive': 1, 'negative': 0})
-val_df['hs_class'] = val_df['hs_class'].map({'positive': 1, 'negative': 0})
+valtest_df['hs_class'] = valtest_df['hs_class'].map({'positive': 1, 'negative': 0})
 
-# Undersample using imbalanced-learn
-# Create the undersampling object
-undersampler = RandomUnderSampler(sampling_strategy='auto', random_state=42)
-
-# Separate the features (X) and the target (y)
-X = df['text'].values.reshape(-1, 1)  # Reshape required because RandomUnderSampler expects a 2D array
-y = df['hs_class']
-X1 = val_df['text'].values.reshape(-1, 1)  # Reshape required because RandomUnderSampler expects a 2D array
-y1 = val_df['hs_class']
-
-
-# Perform the undersampling
-X_resampled, y_resampled = undersampler.fit_resample(X, y)
-X1_resampled, y1_resampled = undersampler.fit_resample(X1, y1)
-
-# Create a new dataframe with the resampled data
-df = pd.DataFrame({'text': X_resampled.flatten(), 'hs_class': y_resampled}) # df here is already resampled
-val_df = pd.DataFrame({'text': X1_resampled.flatten(), 'hs_class': y1_resampled}) # val_df here is already resampled
+# # Apply masking to the training and validation data
+# df['text'] = df['text'].apply(lambda x: mask_keywords(x, keywords))
+# val_df['text'] = val_df['text'].apply(lambda x: mask_keywords(x, keywords))
 
 # Display the modified DataFrame
 print(df.info())
@@ -115,51 +135,77 @@ print(df.sample(5))
 print(df['hs_class'].value_counts())
 
 # Split the dataset
+
+val_df, test_df = train_test_split(valtest_df, test_size=0.5, random_state=42)
 train_df = df
-test_df = val_df
+
+# Tokenize the dataset with padding and truncation
+def tokenize_function(examples):
+    return tokenizer(
+        examples['text'],
+        padding='max_length',   # Ensure sequences are padded to the same length
+        truncation=True,
+        max_length=512
+    )
+
+# Map 'hs_class' to 'labels' as integers for each split (train, val, test)
+train_df['labels'] = train_df['hs_class'].astype(int)
+val_df['labels'] = val_df['hs_class'].astype(int)
+test_df['labels'] = test_df['hs_class'].astype(int)
 
 # Convert pandas DataFrames to Hugging Face Datasets
 train_dataset = Dataset.from_pandas(train_df)
+val_dataset = Dataset.from_pandas(val_df)
 test_dataset = Dataset.from_pandas(test_df)
 
-# Tokenize the dataset
-def tokenize_function(examples):
-    return tokenizer(examples['text'], padding='max_length', truncation=True, max_length=512)
-
+# Apply the tokenization to the datasets
 train_dataset = train_dataset.map(tokenize_function, batched=True)
+val_dataset = val_dataset.map(tokenize_function, batched=True)
 test_dataset = test_dataset.map(tokenize_function, batched=True)
 
-# Rename 'hs_class' to 'labels' for the model input
-train_dataset = train_dataset.rename_column('hs_class', 'labels')
-test_dataset = test_dataset.rename_column('hs_class', 'labels')
+# Remove unnecessary columns, keeping 'labels' and input data
+# Check for __index_level_0__ before attempting to remove it
+columns_to_remove = ['text', 'hs_class']
+for column in ['__index_level_0__', 'index']:
+    if column in train_dataset.column_names:
+        columns_to_remove.append(column)
 
-# Remove columns that are not input for the model (keep 'labels')
-# Remove only 'text' since '__index_level_0__' is not present in the dataset anymore
-train_dataset = train_dataset.remove_columns(['text'])
-test_dataset = test_dataset.remove_columns(['text'])
+train_dataset = train_dataset.remove_columns(columns_to_remove)
+val_dataset = val_dataset.remove_columns(columns_to_remove)
+test_dataset = test_dataset.remove_columns(columns_to_remove)
 
-# Set format for PyTorch
-train_dataset.set_format('torch')
-test_dataset.set_format('torch')
+# Set the format for PyTorch tensors
+train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+val_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+
 
 # Create a data collator
 data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
-# Define the training arguments
+# Reduce batch size to fit within memory constraints
 training_args = TrainingArguments(
     output_dir='./results',
-    num_train_epochs=10,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
+    num_train_epochs=20,
+    per_device_train_batch_size=8,   # Reduced batch size to lower memory usage
+    per_device_eval_batch_size=8,    # Reduced batch size for evaluation
     warmup_steps=500,
     weight_decay=0.01,
     logging_dir='./logs',
     logging_steps=1000,
-    evaluation_strategy="epoch", # Evaluate at the end of each epoch
-    save_steps=10000,  # Save a checkpoint every 10000 steps (adjust as needed)
-    save_total_limit=2,  # Keep only the 2 most recent checkpoints
-    learning_rate=1e-6  # Custom learning rate
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+    load_best_model_at_end=True,
+    save_total_limit=1,
+    learning_rate=1e-5,
+    fp16=True,  # Enable mixed precision for memory optimization
 )
+
+# Enable gradient checkpointing to save memory during training
+model.gradient_checkpointing_enable()
+
+# Set environment variable to control memory fragmentation
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 
 # Define the compute_metrics function
 def compute_metrics(p):
@@ -174,29 +220,29 @@ def compute_metrics(p):
         'recall': recall
     }
 
-# Initialize the Trainer
+# Initialize the Trainer with memory-optimized settings
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
-    eval_dataset=test_dataset,
+    eval_dataset=val_dataset,
     compute_metrics=compute_metrics,
-    data_collator=data_collator  # Use the data collator for padding
+    data_collator=data_collator
 )
 
 # Train the model
 trainer.train()
 
-# Evaluate the model
-eval_results = trainer.evaluate()
+# Evaluate the model on the test dataset
+test_results = trainer.evaluate(test_dataset)
 
-# Print evaluation results
-print(f"Evaluation results:\n"
-      f"  Loss: {eval_results['eval_loss']:.4f}\n"
-      f"  Accuracy: {eval_results['eval_accuracy']:.4f}\n"
-      f"  Precision: {eval_results['eval_precision']:.4f}\n"
-      f"  Recall: {eval_results['eval_recall']:.4f}\n"
-      f"  F1 Score: {eval_results['eval_f1']:.4f}")
+# Print evaluation results on the test set
+print(f"Evaluation results on test set:\n"
+      f"  Loss: {test_results['eval_loss']:.4f}\n"
+      f"  Accuracy: {test_results['eval_accuracy']:.4f}\n"
+      f"  Precision: {test_results['eval_precision']:.4f}\n"
+      f"  Recall: {test_results['eval_recall']:.4f}\n"
+      f"  F1 Score: {test_results['eval_f1']:.4f}")
 
 # Collect evaluation metrics over epochs
 history = trainer.state.log_history

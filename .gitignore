@@ -1,1 +1,5 @@
 *.csv
+*.safetensors
+*.pt
+*.pth
+*.bin
